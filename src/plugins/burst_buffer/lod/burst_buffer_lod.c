@@ -89,6 +89,7 @@ bool lod_started = false;
 bool lod_setup = false;
 bool lod_stage_out = false;
 bool lod_stage_in = false;
+bool lod_need_stop = false;
 
 /* LOD options */
 char *nodes = NULL;
@@ -279,6 +280,9 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 						debug2("RDEBUG: _parse_bb_opts found sout_dest=%s",
 						       sout_dest);
 					}
+				} else if (!strncmp(tok, "stop", 4)) {
+					lod_need_stop = true;
+					debug2("RDEBUG: _parse_bb_opts in stage_out");
 				}
 			}
 
@@ -501,7 +505,7 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 	}
 
 	/* step 2: stop LOD */
-	if (lod_started) {
+	if (lod_started && lod_need_stop) {
                 int index;
 
 		script_argv = xmalloc(sizeof(char *) * 4);
