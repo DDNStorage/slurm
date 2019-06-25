@@ -90,6 +90,89 @@ bool lod_setup = false;
 bool lod_stage_out = false;
 bool lod_stage_in = false;
 
+char *nodes = NULL;
+char *mdtdevs = NULL;
+char *ostdevs = NULL;
+char *inet = NULL;
+char *mountpoint = NULL;
+
+/* Write an string representing the NIDs of a job's nodes to an arbitrary
+ * file location
+ * RET 0 or Slurm error code
+ */
+static int convert_node_list(char *node_list) {
+#if 0
+	char *tmp, *sep, *buf = NULL;
+	int i, j, rc;
+
+	xassert(file_name);
+	tmp = xstrdup(node_list);
+	/* Remove any trailing "]" */
+	sep = strrchr(tmp, ']');
+	if (sep)
+		sep[0] = '\0';
+	/* Skip over "nid[" or "nid" */
+	sep = strchr(tmp, '[');
+	if (sep) {
+		sep++;
+	} else {
+		sep = tmp;
+		for (i = 0; !isdigit(sep[0]) && sep[0]; i++)
+			sep++;
+	}
+	/* Copy numeric portion */
+	buf = xmalloc(strlen(sep) + 1);
+	for (i = 0, j = 0; sep[i]; i++) {
+		/* Skip leading zeros */
+		if ((sep[i] == '0') && isdigit(sep[i+1]))
+			continue;
+		/* Copy significant digits and separator */
+		while (sep[i]) {
+			if (sep[i] == ',') {
+				buf[j++] = '\n';
+				break;
+			}
+			buf[j++] = sep[i];
+			if (sep[i] == '-')
+				break;
+			i++;
+		}
+		if (!sep[i])
+			break;
+	}
+	xfree(tmp);
+
+	if (buf[0]) {
+		//rc = _write_file(file_name, buf);
+	} else {
+		error("%s:dd %pJ has node list without numeric component (%s)",
+		      __func__, job_ptr, node_list);
+		rc = EINVAL;
+	}
+	xfree(buf);
+	return rc;
+
+	char *tok, *buf = NULL;
+	int rc;
+
+	xassert(file_name);
+	if (node_list && node_list[0]) {
+		hostlist_t hl = hostlist_create(node_list);
+		while ((tok = hostlist_shift(hl))) {
+			xstrfmtcat(buf, "%s\n", tok);
+			free(tok);
+		}
+		hostlist_destroy(hl);
+		rc = _write_file(file_name, buf);
+		xfree(buf);
+	} else {
+		error("%s: %pJ lacks a node list",  __func__, job_ptr);
+		rc = EINVAL;
+	}
+	return rc;
+#endif
+}
+
 /* stage_in */
 char *sin_src  = NULL;
 char *sin_dest = NULL;
@@ -204,6 +287,10 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 				/* setup */
 				if (!strncmp(tok, "setup", 5)) {
 					lod_setup = true;
+					if ((sub_tok = strstr(tok, "node="))) {
+                                               nodes = xstrdup(sub_tok + 5);
+                                               debug2("RDEBUG: _parse_bb_opts found node=%s", nodes);
+                                        }
 				} else if (!strncmp(tok, "stage_in", 8)) {
 					lod_stage_in = true;
 					debug2("RDEBUG: _parse_bb_opts in stage_in");
@@ -351,12 +438,20 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 	/* step 1: start LOD */
 	if (lustre_on_demand) {
 		debug2("RDEBUG: bb_p_job_begin found LD i.e. Lustre On Demand");
+	        if (job_ptr->sched_nodes) {
+		    nodes = xstrdump(job_ptr->sched_nodes);
+		    debug2("RDEBUG: nodes:%s", nodes);
+	        }
+		debug2("RDEBUG: no nodes");
+
 		script_argv = xmalloc(sizeof(char *) * 4);
 		script_argv[0] = xstrdup("lod");
-		script_argv[1] = xstrdup("start");
+		xstrfmtcat(script_argv[1], "--node=%s", nodes);
+		script_argv[2] = xstrdup("start");
 		rc_msg = run_command("lod_setup", "/usr/sbin/lod",
 		                     script_argv, 8000000,
 				     pthread_self(), &status);
+		debug2("RDEBUG: command [%s %s %s]", script_argv[0], script_argv[1], script_argv[2]);
 		debug2("RDEBUG: bb_p_job_begin lod_setup rc=[%s]", rc_msg);
 		free_command_argv(script_argv);
 		if (!WIFEXITED(status) || (WEXITSTATUS(status) != 0))
@@ -430,12 +525,14 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 
 	/* step 2: stop LOD */
 	if (lod_started) {
-		script_argv = xmalloc(sizeof(char *) * 2);
+		script_argv = xmalloc(sizeof(char *) * 4);
 		script_argv[0] = xstrdup("lod");
-		script_argv[1] = xstrdup("stop");
+		xstrfmtcat(script_argv[1], "--node=%s", nodes);
+		script_argv[2] = xstrdup("stop");
 		rc_msg = run_command("lod_teardown", "/usr/sbin/lod",
 				     script_argv, 8000000,
 				     pthread_self(), &status);
+		debug2("RDEBUG: command [%s %s %s]", script_argv[0], script_argv[1], script_argv[2]);
 		debug2("RDEBUG: bb_p_job_start_stage_out after lod_teardown rc=[%s]", rc_msg);
 		free_command_argv(script_argv);
 		lod_started = false;
