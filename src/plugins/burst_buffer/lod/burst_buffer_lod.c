@@ -100,10 +100,12 @@ char *mountpoint = NULL;
 
 /* stage_in */
 char *sin_src  = NULL;
+char *sin_srclist  = NULL;
 char *sin_dest = NULL;
 
 /* stage_out */
 char *sout_src  = NULL;
+char *sout_srclist  = NULL;
 char *sout_dest = NULL;
 
 /*
@@ -256,6 +258,13 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 						debug2("RDEBUG: _parse_bb_opts found sin_src=%s",
 						       sin_src);
 					}
+					if ((sub_tok = strstr(tok, "sourcelist="))) {
+						sin_srclist = xstrdup(sub_tok + 11);
+						if ((sub_tok = strchr(sin_srclist, ' ')))
+							sub_tok[0] = '\0';
+						debug2("RDEBUG: _parse_bb_opts found sin_srclist=%s",
+						       sin_srclist);
+					}
 					if ((sub_tok = strstr(tok, "destination="))) {
 						sin_dest = xstrdup(sub_tok + 12);
 						if ((sub_tok = strchr(sin_dest, ' ')))
@@ -272,6 +281,13 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 							sub_tok[0] = '\0';
 						debug2("RDEBUG: _parse_bb_opts found sout_src=%s",
 						       sout_src);
+					}
+					if ((sub_tok = strstr(tok, "sourcelist="))) {
+						sout_srclist = xstrdup(sub_tok + 11);
+						if ((sub_tok = strchr(sout_srclist, ' ')))
+							sub_tok[0] = '\0';
+						debug2("RDEBUG: _parse_bb_opts found sin_srclist=%s",
+						       sout_srclist);
 					}
 					if ((sub_tok = strstr(tok, "destination="))) {
 						sout_dest = xstrdup(sub_tok + 12);
@@ -389,6 +405,7 @@ extern int bb_p_job_test_stage_in(struct job_record *job_ptr, bool test_only)
 extern int bb_p_job_begin(struct job_record *job_ptr)
 {
 	int status = 0;
+	int index;
 	char *rc_msg;
 	char **script_argv;
 
@@ -396,8 +413,6 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 	debug2("RDEBUG : bb_p_job_begin entry");
 	/* step 1: start LOD */
 	if (lustre_on_demand) {
-		int index;
-
 		debug2("RDEBUG: bb_p_job_begin found LD i.e. Lustre On Demand");
 
 		script_argv = xmalloc(sizeof(char *) * 8);
@@ -443,12 +458,51 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 	/* step 2: stage in */
 	if (lod_stage_in) {
 		lod_stage_in = false;
-		script_argv = xmalloc(sizeof(char *) * 4);
-		script_argv[0] = xstrdup("cp");
-		xstrfmtcat(script_argv[1], "%s", sin_src);
-		xstrfmtcat(script_argv[2], "%s", sin_dest);
-		rc_msg = run_command("stage_in", "/usr/bin/cp", script_argv, 30000,
+		script_argv = xmalloc(sizeof(char *) * 8);
+		script_argv[0] = xstrdup("lod");
+                index = 1;
+
+                if (nodes != NULL) {
+			xstrfmtcat(script_argv[index], "--node=%s", nodes);
+			index ++;
+		}
+
+                if (mdtdevs != NULL) {
+			xstrfmtcat(script_argv[index], "--mdtdevs=%s", mdtdevs);
+			index ++;
+		}
+                if (ostdevs != NULL) {
+			xstrfmtcat(script_argv[index], "--ostdevs=%s", ostdevs);
+			index ++;
+		}
+                if (inet != NULL) {
+			xstrfmtcat(script_argv[index], "--inet=%s", inet);
+			index ++;
+		}
+                if (mountpoint != NULL) {
+			xstrfmtcat(script_argv[index], "--mountpoint=%s", mountpoint);
+			index ++;
+		}
+		if (sin_srclist != NULL) {
+			xstrfmtcat(script_argv[index], "--sourcelist=%s", sin_srclist);
+			index ++;
+		}
+                if (sin_src != NULL) {
+			xstrfmtcat(script_argv[index], "--source=%s", sin_src);
+			index ++;
+		}
+                if (sin_dest != NULL) {
+			xstrfmtcat(script_argv[index], "--destination=%s", sin_dest);
+			index ++;
+		}
+
+		script_argv[index] = xstrdup("stage_in");
+
+		rc_msg = run_command("stage_in", "/usr/sbin/lod", script_argv, 30000,
 				     pthread_self(), &status);
+		debug2("RDEBUG: command:");
+		for (int i = 0; i <= index; i++)
+			debug2("%s", script_argv[i]);
 		debug2("RDEBUG: bb_p_job_begin stage_in rc=[%s]", rc_msg);
 		free_command_argv(script_argv);
 		if (!WIFEXITED(status) || (WEXITSTATUS(status) != 0))
@@ -478,6 +532,7 @@ extern int bb_p_job_revoke_alloc(struct job_record *job_ptr)
 extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 {
 	int status = 0;
+	int index;
 	char *rc_msg;
 	char **script_argv;
 
@@ -490,14 +545,51 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 	/* step 1: stage out */
 	if (lod_stage_out) {
 		lod_stage_out = false;
-		script_argv = xmalloc(sizeof(char *) * 4);
-		script_argv[0] = xstrdup("cp");
-		xstrfmtcat(script_argv[1], "%s", sout_src);
-		xstrfmtcat(script_argv[2], "%s", sout_dest);
-		script_argv[2] = xstrdup(sout_dest);
-		rc_msg = run_command("stage_out", "/usr/bin/scp",
-				     script_argv, 30000,
+		script_argv = xmalloc(sizeof(char *) * 8);
+		script_argv[0] = xstrdup("lod");
+                index = 1;
+
+                if (nodes != NULL) {
+			xstrfmtcat(script_argv[index], "--node=%s", nodes);
+			index ++;
+		}
+
+                if (mdtdevs != NULL) {
+			xstrfmtcat(script_argv[index], "--mdtdevs=%s", mdtdevs);
+			index ++;
+		}
+                if (ostdevs != NULL) {
+			xstrfmtcat(script_argv[index], "--ostdevs=%s", ostdevs);
+			index ++;
+		}
+                if (inet != NULL) {
+			xstrfmtcat(script_argv[index], "--inet=%s", inet);
+			index ++;
+		}
+                if (mountpoint != NULL) {
+			xstrfmtcat(script_argv[index], "--mountpoint=%s", mountpoint);
+			index ++;
+		}
+		if (sout_srclist != NULL) {
+			xstrfmtcat(script_argv[index], "--sourcelist=%s", sout_srclist);
+			index ++;
+		}
+                if (sout_src != NULL) {
+			xstrfmtcat(script_argv[index], "--source=%s", sout_src);
+			index ++;
+		}
+                if (sout_dest != NULL) {
+			xstrfmtcat(script_argv[index], "--destination=%s", sout_dest);
+			index ++;
+		}
+
+		script_argv[index] = xstrdup("stage_out");
+
+		rc_msg = run_command("stage_out", "/usr/sbin/lod", script_argv, 30000,
 				     pthread_self(), &status);
+		debug2("RDEBUG: command:");
+		for (int i = 0; i <= index; i++)
+			debug2("%s", script_argv[i]);
 		debug2("RDEBUG: bb_p_job_start_stage_out after stage_out rc=[%s]", rc_msg);
 		free_command_argv(script_argv);
 		if (!WIFEXITED(status) || (WEXITSTATUS(status) != 0))
@@ -506,8 +598,6 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 
 	/* step 2: stop LOD */
 	if (lod_started && lod_need_stop) {
-                int index;
-
 		script_argv = xmalloc(sizeof(char *) * 4);
 		script_argv[0] = xstrdup("lod");
 		index = 1;
