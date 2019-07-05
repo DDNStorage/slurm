@@ -84,6 +84,10 @@ const char plugin_name[]        = "burst_buffer lustre_on_demand plugin";
 const char plugin_type[]        = "burst_buffer/lod";
 const uint32_t plugin_version   = SLURM_VERSION_NUMBER;
 
+/* Script line types */
+#define LINE_OTHER 0
+#define LINE_LOD   1
+
 bool lustre_on_demand = false;
 bool lod_started = false;
 bool lod_setup = false;
@@ -124,6 +128,21 @@ extern int init(void)
 extern int fini(void)
 {
 	debug2("RDEBUG : in fini");
+
+	xfree(nodes);
+	xfree(mdtdevs);
+	xfree(ostdevs);
+	xfree(inet);
+	xfree(mountpoint);
+
+	xfree(sin_src);
+	xfree(sin_srclist);
+	xfree(sin_dest);
+
+	xfree(sout_src);
+	xfree(sout_srclist);
+	xfree(sout_dest);
+
 	return SLURM_SUCCESS;
 }
 
@@ -186,6 +205,55 @@ extern int bb_p_state_pack(uid_t uid, Buf buffer, uint16_t protocol_version)
 	return SLURM_SUCCESS;
 }
 
+/* Copy a batch job's burst_buffer options into a separate buffer.
+ * merge continued lines into a single line */
+static int _xlate_batch(struct job_descriptor *job_desc)
+{
+	char *script, *save_ptr = NULL, *tok;
+	int line_type;
+	bool is_cont = false, has_space = false;
+	int len, rc = SLURM_SUCCESS;
+
+	script = xstrdup(job_desc->script);
+	tok = strtok_r(script, "\n", &save_ptr);
+	while (tok) {
+		if (tok[0] != '#')
+			break;	/* Quit at first non-comment */
+
+		if ((tok[1] == 'L') && (tok[2] == 'O') && (tok[3] == 'D'))
+			line_type = LINE_LOD;
+		else
+			line_type = LINE_OTHER;
+
+		if (line_type == LINE_OTHER) {
+			is_cont = false;
+		} else {
+			if (is_cont) {
+				tok += 4; 	/* Skip "#LOD" */
+				while (has_space && isspace(tok[0]))
+					tok++;	/* Skip duplicate spaces */
+			} else if (job_desc->burst_buffer) {
+				xstrcat(job_desc->burst_buffer, "\n");
+			}
+
+			len = strlen(tok);
+			if (tok[len - 1] == '\\') {
+				has_space = isspace(tok[len - 2]);
+				tok[strlen(tok) - 1] = '\0';
+				is_cont = true;
+			} else {
+				is_cont = false;
+			}
+			xstrcat(job_desc->burst_buffer, tok);
+		}
+		tok = strtok_r(NULL, "\n", &save_ptr);
+	}
+	xfree(script);
+	if (rc != SLURM_SUCCESS)
+		xfree(job_desc->burst_buffer);
+	return rc;
+}
+
 /* Perform basic burst_buffer option validation */
 static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
                          uid_t submit_uid)
@@ -195,8 +263,15 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 	char *sub_tok;
 	int rc = SLURM_SUCCESS;
 
-	if (job_desc->script != NULL) {
-		bb_script = xstrdup(job_desc->script);
+	if (!job_desc->script)
+		return rc;
+
+	rc = _xlate_batch(job_desc);
+	if (rc != SLURM_SUCCESS)
+		return rc;
+
+	if (job_desc->burst_buffer != NULL) {
+		bb_script = xstrdup(job_desc->burst_buffer);
 		tok = strtok_r(bb_script, "\n", &save_ptr);
 		while (tok) {
 			if (tok[0] != '#')
@@ -213,6 +288,12 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 					tok++;
 				/* setup */
 				if (!strncmp(tok, "setup", 5)) {
+					xfree(nodes);
+					xfree(mdtdevs);
+					xfree(ostdevs);
+					xfree(inet);
+					xfree(mountpoint);
+
 					lod_setup = true;
 					if ((sub_tok = strstr(tok, "node="))) {
 						nodes = xstrdup(sub_tok + 5);
@@ -249,6 +330,9 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 						debug2("RDEBUG: _parse_bb_opts found mountpoint=%s", mountpoint);
 					}
 				} else if (!strncmp(tok, "stage_in", 8)) {
+					xfree(sin_src);
+					xfree(sin_srclist);
+					xfree(sin_dest);
 					lod_stage_in = true;
 					debug2("RDEBUG: _parse_bb_opts in stage_in");
 					if ((sub_tok = strstr(tok, "source="))) {
@@ -273,6 +357,9 @@ static int _parse_bb_opts(struct job_descriptor *job_desc, uint64_t *bb_size,
 						       sin_dest);
 					}
 				} else if (!strncmp(tok, "stage_out", 8)) {
+					xfree(sout_src);
+					xfree(sout_srclist);
+					xfree(sout_dest);
 					lod_stage_out = true;
 					debug2("RDEBUG: _parse_bb_opts in stage_out");
 					if ((sub_tok = strstr(tok, "source="))) {
@@ -332,7 +419,18 @@ extern int bb_p_job_validate(struct job_descriptor *job_desc,
 	debug2("RDEBUG : in bb_p_job_validate before parsing");
 
 	rc = _parse_bb_opts(job_desc, &bb_size, submit_uid);
+	if (rc != SLURM_SUCCESS)
+		goto out;
 
+	if ((job_desc->burst_buffer == NULL) ||
+	    (job_desc->burst_buffer[0] == '\0'))
+		return rc;
+
+	info("%s: %s: job_user_id:%u, submit_uid:%d",
+	     plugin_type, __func__, job_desc->user_id, submit_uid);
+	info("%s: burst_buffer:\n%s", __func__, job_desc->burst_buffer);
+
+out:
 	debug2("RDEBUG : in bb_p_job_validate after parsing");
 	return rc;
 }
@@ -409,7 +507,6 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 	char *rc_msg;
 	char **script_argv;
 
-
 	debug2("RDEBUG : bb_p_job_begin entry");
 	/* step 1: start LOD */
 	if (lustre_on_demand) {
@@ -421,6 +518,13 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 
                 if (nodes != NULL) {
 			xstrfmtcat(script_argv[index], "--node=%s", nodes);
+			index ++;
+		} else if (job_ptr->job_resrcs->nodes) {
+			char *res_nodes;
+
+			res_nodes = xstrdup(job_ptr->job_resrcs->nodes);
+			xstrfmtcat(script_argv[index], "--node=%s", res_nodes);
+			xfree(res_nodes);
 			index ++;
 		}
 
@@ -448,6 +552,7 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 		debug2("RDEBUG: command:");
 		for (int i = 0; i <= index; i++)
 			debug2("%s", script_argv[i]);
+
 		debug2("RDEBUG: bb_p_job_begin lod_setup rc=[%s]", rc_msg);
 		free_command_argv(script_argv);
 		if (!WIFEXITED(status) || (WEXITSTATUS(status) != 0))
@@ -464,6 +569,13 @@ extern int bb_p_job_begin(struct job_record *job_ptr)
 
                 if (nodes != NULL) {
 			xstrfmtcat(script_argv[index], "--node=%s", nodes);
+			index ++;
+		} else if (job_ptr->job_resrcs->nodes) {
+			char *res_nodes;
+
+			res_nodes = xstrdup(job_ptr->job_resrcs->nodes);
+			xstrfmtcat(script_argv[index], "--node=%s", res_nodes);
+			xfree(res_nodes);
 			index ++;
 		}
 
@@ -552,6 +664,13 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
                 if (nodes != NULL) {
 			xstrfmtcat(script_argv[index], "--node=%s", nodes);
 			index ++;
+		} else if (job_ptr->job_resrcs->nodes) {
+			char *res_nodes;
+
+			res_nodes = xstrdup(job_ptr->job_resrcs->nodes);
+			xstrfmtcat(script_argv[index], "--node=%s", res_nodes);
+			xfree(res_nodes);
+			index ++;
 		}
 
                 if (mdtdevs != NULL) {
@@ -604,6 +723,13 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
                 if (nodes != NULL) {
 			xstrfmtcat(script_argv[index], "--node=%s", nodes);
 			index ++;
+		} else if (job_ptr->job_resrcs->nodes) {
+			char *res_nodes;
+
+			res_nodes = xstrdup(job_ptr->job_resrcs->nodes);
+			xstrfmtcat(script_argv[index], "--node=%s", res_nodes);
+			xfree(res_nodes);
+			index ++;
 		}
 
                 if (mdtdevs != NULL) {
@@ -652,6 +778,7 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 extern int bb_p_job_test_post_run(struct job_record *job_ptr)
 {
 	debug2("RDEBUG : in bb_p_job_t_post_run");
+
 	return 1;
 }
 
