@@ -1375,7 +1375,27 @@ extern int bb_p_job_test_stage_out(struct job_record *job_ptr)
  */
 extern int bb_p_job_cancel(struct job_record *job_ptr)
 {
-	debug2("LOD_DEBUG : in bb_p_job_cancel");
+	pthread_t tid;
+        bb_job_t *bb_job;
+
+	debug2("LOD_DEBUG : %s entry", __func__);
+
+	if (bb_state.bb_config.debug_flag)
+		info("%s: %s: %pJ", plugin_type, __func__, job_ptr);
+
+	bb_job = _get_bb_job(job_ptr);
+	if (!bb_job) {
+		verbose("%s: %pJ bb job record not found", __func__, job_ptr);
+		goto out;
+	}
+
+	if (bb_job->state == BB_STATE_PENDING) {
+		bb_job->state = BB_STATE_COMPLETE;  /* Nothing to clean up */
+	} else if (bb_job->state < BB_STATE_POST_RUN) {
+		bb_job->state = BB_STATE_TEARDOWN;
+		slurm_thread_create(&tid, _start_teardown, (void *)bb_job);
+	}
+out:
 	return SLURM_SUCCESS;
 }
 
