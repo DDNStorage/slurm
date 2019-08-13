@@ -665,7 +665,7 @@ extern int bb_p_job_try_stage_in(List job_queue)
 	debug2("LOD_DEBUG :entry bb_p_job_try_stage_in");
 	slurm_mutex_lock(&bb_state.bb_mutex);
 	if (bb_state.bb_config.debug_flag)
-		info("%s: %s %d", plugin_type,  __func__, __LINE__);
+		info("%s: %s", plugin_type,  __func__);
 
 	/* Identify candidates to be allocated burst buffers */
 	job_candidates = list_create(_job_queue_del);
@@ -1288,8 +1288,7 @@ extern int bb_p_job_start_stage_out(struct job_record *job_ptr)
 	}
 
 	lod_bb = (lod_bb_info_t *)bb_job->buf_ptr->access;
-	if (bb_job->state < BB_STATE_RUNNING ||
-		   (!lod_bb->lod_stage_in && !lod_bb->lod_stage_out)) {
+	if (bb_job->state < BB_STATE_RUNNING || !lod_bb->lod_stage_out) {
 		/* Job never started or no stage_out. Just teardown the buffer */
 		bb_job->state = BB_STATE_TEARDOWN;
 		//slurm_thread_create_detached(NULL, _start_teardown, (void *)bb_job);
