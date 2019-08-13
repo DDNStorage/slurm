@@ -922,6 +922,11 @@ static void* _start_stage_in(void *ptr)
 				   lod_bb->sin_src);
 			index ++;
 		}
+                if (lod_bb->sin_srclist != NULL) {
+			xstrfmtcat(script_argv[index], "--sourcelist=%s",
+				   lod_bb->sin_srclist);
+			index ++;
+		}
                 if (lod_bb->sin_dest != NULL) {
 			xstrfmtcat(script_argv[index], "--destination=%s",
 				   lod_bb->sin_dest);
