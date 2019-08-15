@@ -514,7 +514,7 @@ static int _create_lod_job(struct job_record *job_ptr)
 						sout_srclist = xstrdup(sub_tok + 11);
 						if ((sub_tok = strchr(sout_srclist, ' ')))
 							sub_tok[0] = '\0';
-						debug2("LOD_DEBUG: _parse_bb_opts found sin_srclist=%s",
+						debug2("LOD_DEBUG: _parse_bb_opts found sout_srclist=%s",
 						       sout_srclist);
 					}
 					if ((sub_tok = strstr(tok, "destination="))) {
