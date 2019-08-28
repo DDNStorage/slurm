@@ -3,6 +3,8 @@
  *****************************************************************************
  *  Copyright (C) 2014-2015 SchedMD LLC.
  *  Written by Morris Jette <jette@schedmd.com>
+ *  Copyright (c) 2018-2019 DataDirect Networks, Inc.
+ *  Written by Gu Zheng <gzheng@ddn.com>
  *
  *  This file is part of Slurm, a resource management program.
  *  For details, see <https://slurm.schedmd.com/>.
