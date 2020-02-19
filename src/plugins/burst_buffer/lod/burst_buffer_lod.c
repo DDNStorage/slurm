@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "slurm/slurm.h"
 
@@ -105,6 +106,10 @@ typedef struct lod_bb_info {
 	char *ostdevs;
 	char *inet;
 	char *mountpoint;
+	/* Following three are optional */
+	char *mds;
+	char *oss;
+	char *fsname;
 
 	/* stage_in */
 	char *sin_src;
@@ -116,6 +121,31 @@ typedef struct lod_bb_info {
 	char *sout_srclist;
 	char *sout_dest;
 } lod_bb_info_t;
+
+static void lod_bb_gen_fsname(char *str, int size)
+{
+	int i, flag;
+
+	srand(time(NULL));
+	for(i = 0; i < size; i ++)
+	{
+		flag = rand() % 3;
+		switch(flag) {
+		case 0:
+			str[i] = rand() % 26 + 'a';
+			break;
+		case 1:
+			str[i] = rand() % 26 + 'A';
+			break;
+		case 2:
+			str[i] = rand() % 10 + '0';
+			break;
+		default:
+			break;
+		}
+	}
+	str[size] = '\0';
+}
 
 static bb_job_t *_get_bb_job(struct job_record *job_ptr);
 /* Validate that our configuration is valid for this plugin type */
@@ -405,6 +435,12 @@ static int _create_lod_job(struct job_record *job_ptr)
 	char *ostdevs = NULL;
 	char *inet= NULL;
 	char *mountpoint = NULL;
+	char *mds = NULL;
+	char *oss = NULL;
+	char *fsname = NULL;
+	char fsname_buff[8];
+
+
 
 	/* stage_in */
 	char *sin_src = NULL;
@@ -416,6 +452,9 @@ static int _create_lod_job(struct job_record *job_ptr)
 	char *sout_srclist = NULL;
 	char *sout_dest = NULL;
 	int rc = SLURM_SUCCESS;
+
+	lod_bb_gen_fsname(fsname_buff, 7);
+        fsname = xstrdup(fsname_buff);
 
 	if (job_ptr->burst_buffer != NULL) {
 		bb_script = xstrdup(job_ptr->burst_buffer);
@@ -471,6 +510,27 @@ static int _create_lod_job(struct job_record *job_ptr)
 						if ((sub_tok = strchr(mountpoint, ' ')))
 							sub_tok[0] = '\0';
 						debug2("LOD_DEBUG: _parse_bb_opts found mountpoint=%s", mountpoint);
+					}
+
+					if ((sub_tok = strstr(tok, "oss="))) {
+						oss = xstrdup(sub_tok + 4);
+						if ((sub_tok = strchr(oss, ' ')))
+							sub_tok[0] = '\0';
+						debug2("LOD_DEBUG: _parse_bb_opts found oss=%s", oss);
+					}
+
+					if ((sub_tok = strstr(tok, "mds="))) {
+						mds = xstrdup(sub_tok + 4);
+						if ((sub_tok = strchr(mds, ' ')))
+							sub_tok[0] = '\0';
+						debug2("LOD_DEBUG: _parse_bb_opts found mds=%s", mds);
+					}
+
+					if ((sub_tok = strstr(tok, "fsname="))) {
+						fsname = xstrdup(sub_tok + 7);
+						if ((sub_tok = strchr(fsname, ' ')))
+							sub_tok[0] = '\0';
+						debug2("LOD_DEBUG: _parse_bb_opts found fsname=%s", fsname);
 					}
 				} else if (!strncmp(tok, "stage_in", 8)) {
 					xfree(sin_src);
@@ -551,10 +611,13 @@ static int _create_lod_job(struct job_record *job_ptr)
 
 		/* LOD options */
 		lod_bb->nodes = nodes;
+		lod_bb->mds = mds;
+		lod_bb->oss = oss;
 		lod_bb->mdtdevs = mdtdevs;
 		lod_bb->ostdevs = ostdevs;
 		lod_bb->inet = inet;
 		lod_bb->mountpoint = mountpoint;
+		lod_bb->fsname = fsname;
 
 		/* stage_in */
 		lod_bb->sin_src = sin_src;
@@ -812,8 +875,8 @@ static void* _start_stage_in(void *ptr)
 
 		script_argv = xcalloc(12, sizeof(char *));
 		script_argv[0] = xstrdup("lod");
-                index = 1;
-                if (lod_bb->nodes != NULL) {
+		index = 1;
+		if (lod_bb->nodes != NULL) {
 			xstrfmtcat(script_argv[index], "--node=%s",
 				   lod_bb->nodes);
 			index ++;
@@ -826,25 +889,46 @@ static void* _start_stage_in(void *ptr)
 			index ++;
 		}
 
-                if (lod_bb->mdtdevs != NULL) {
+		if (lod_bb->mds != NULL) {
+			xstrfmtcat(script_argv[index], "--mds=%s",
+				   lod_bb->mds);
+			index ++;
+		}
+
+		if (lod_bb->oss != NULL) {
+			xstrfmtcat(script_argv[index], "--oss=%s",
+				   lod_bb->oss);
+			index ++;
+		}
+
+		if (lod_bb->mdtdevs != NULL) {
 			xstrfmtcat(script_argv[index], "--mdtdevs=%s",
 				   lod_bb->mdtdevs);
 			index ++;
 		}
-                if (lod_bb->ostdevs != NULL) {
+
+		if (lod_bb->ostdevs != NULL) {
 			xstrfmtcat(script_argv[index], "--ostdevs=%s",
 				   lod_bb->ostdevs);
 			index ++;
 		}
-                if (lod_bb->inet != NULL) {
+		if (lod_bb->inet != NULL) {
 			xstrfmtcat(script_argv[index], "--inet=%s",
 				   lod_bb->inet);
 			index ++;
 		}
-                if (lod_bb->mountpoint != NULL) {
-			xstrfmtcat(script_argv[index], "--mountpoint=%s", lod_bb->mountpoint);
+		if (lod_bb->mountpoint != NULL) {
+			xstrfmtcat(script_argv[index], "--mountpoint=%s",
+				   lod_bb->mountpoint);
 			index ++;
 		}
+
+		if (lod_bb->fsname != NULL) {
+			xstrfmtcat(script_argv[index], "--fsname=%s",
+				   lod_bb->fsname);
+			index ++;
+		}
+
 		script_argv[index] = xstrdup("start");
 
 		debug2("LOD_DEBUG: command:");
@@ -882,7 +966,7 @@ static void* _start_stage_in(void *ptr)
 
 	/* step 2: stage in */
 	if (lod_bb->lod_stage_in) {
-		script_argv = xcalloc(12, sizeof(char *));
+		script_argv = xcalloc(8, sizeof(char *));
 		script_argv[0] = xstrdup("lod");
                 index = 1;
 
@@ -899,26 +983,6 @@ static void* _start_stage_in(void *ptr)
 			index ++;
 		}
 
-                if (lod_bb->mdtdevs != NULL) {
-			xstrfmtcat(script_argv[index], "--mdtdevs=%s",
-				   lod_bb->mdtdevs);
-			index ++;
-		}
-                if (lod_bb->ostdevs != NULL) {
-			xstrfmtcat(script_argv[index], "--ostdevs=%s",
-				   lod_bb->ostdevs);
-			index ++;
-		}
-                if (lod_bb->inet != NULL) {
-			xstrfmtcat(script_argv[index], "--inet=%s",
-				   lod_bb->inet);
-			index ++;
-		}
-                if (lod_bb->mountpoint != NULL) {
-			xstrfmtcat(script_argv[index], "--mountpoint=%s",
-			lod_bb->mountpoint);
-			index ++;
-		}
                 if (lod_bb->sin_src != NULL) {
 			xstrfmtcat(script_argv[index], "--source=%s",
 				   lod_bb->sin_src);
@@ -1052,7 +1116,7 @@ static void* _start_teardown(void *data) {
 
 	job_ptr = find_job_record(bb_job->job_id);
 	track_script_rec = track_script_rec_add(job_ptr->job_id, 0, pthread_self());
-	script_argv = xcalloc(8, sizeof(char *));
+	script_argv = xcalloc(12, sizeof(char *));
 	script_argv[0] = xstrdup("lod");
         index = 1;
 
@@ -1066,6 +1130,18 @@ static void* _start_teardown(void *data) {
 		res_nodes = xstrdup(job_ptr->job_resrcs->nodes);
 		xstrfmtcat(script_argv[index], "--node=%s", res_nodes);
 		xfree(res_nodes);
+		index ++;
+	}
+
+	if (lod_bb->mds != NULL) {
+		xstrfmtcat(script_argv[index], "--mds=%s",
+			   lod_bb->mds);
+		index ++;
+	}
+
+	if (lod_bb->oss != NULL) {
+		xstrfmtcat(script_argv[index], "--oss=%s",
+			   lod_bb->oss);
 		index ++;
 	}
 
@@ -1084,9 +1160,16 @@ static void* _start_teardown(void *data) {
 			   lod_bb->inet);
 		index ++;
 	}
+
         if (lod_bb->mountpoint != NULL) {
 		xstrfmtcat(script_argv[index], "--mountpoint=%s",
 			   lod_bb->mountpoint);
+		index ++;
+	}
+
+	if (lod_bb->fsname != NULL) {
+		xstrfmtcat(script_argv[index], "--fsname=%s",
+			   lod_bb->fsname);
 		index ++;
 	}
 
@@ -1096,7 +1179,7 @@ static void* _start_teardown(void *data) {
 	for (int i = 0; i <= index; i++)
 		debug2("%s", script_argv[i]);
 	START_TIMER;
-	rc_msg = run_command("teardown",
+	rc_msg = run_command("lod_teardown",
 			     bb_state.bb_config.get_sys_state,
 			     script_argv, timeout,
 			     pthread_self(), &status);
@@ -1165,7 +1248,7 @@ static void *_start_stage_out(void *data) {
 	else
 		timeout = DEFAULT_OTHER_TIMEOUT * 1000;
 
-	script_argv = xcalloc(10, sizeof(char *));
+	script_argv = xcalloc(8, sizeof(char *));
 	track_script_rec = track_script_rec_add(bb_job->job_id, 0, pthread_self());
 	script_argv[0] = xstrdup("lod");
         index = 1;
@@ -1184,26 +1267,6 @@ static void *_start_stage_out(void *data) {
 		index ++;
 	}
 
-        if (lod_bb->mdtdevs != NULL) {
-		xstrfmtcat(script_argv[index], "--mdtdevs=%s",
-			   lod_bb->mdtdevs);
-		index ++;
-	}
-        if (lod_bb->ostdevs != NULL) {
-		xstrfmtcat(script_argv[index], "--ostdevs=%s",
-			   lod_bb->ostdevs);
-		index ++;
-	}
-        if (lod_bb->inet != NULL) {
-		xstrfmtcat(script_argv[index], "--inet=%s",
-			   lod_bb->inet);
-		index ++;
-	}
-        if (lod_bb->mountpoint != NULL) {
-		xstrfmtcat(script_argv[index], "--mountpoint=%s",
-			   lod_bb->mountpoint);
-		index ++;
-	}
 	if (lod_bb->sout_srclist != NULL) {
 		xstrfmtcat(script_argv[index], "--sourcelist=%s",
 			   lod_bb->sout_srclist);
@@ -1226,7 +1289,7 @@ static void *_start_stage_out(void *data) {
 	for (int i = 0; i <= index; i++)
 		debug2("%s", script_argv[i]);
 	START_TIMER;
-	rc_msg = run_command("stage_out",
+	rc_msg = run_command("lod_stage_out",
 			     bb_state.bb_config.get_sys_state,
 			     script_argv, timeout,
 			     pthread_self(), &status);
